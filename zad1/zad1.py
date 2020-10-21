@@ -1,8 +1,11 @@
+import time
+start = time.time() 
 import sys 
 import numpy as np
 import random
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt #uncomment to draw histograms
 from tqdm import tqdm
+from numba import jit
 
 def analyzeArguments(): #handling command line arguments
     if len(sys.argv)!=4:
@@ -24,8 +27,8 @@ def initializeB(a): #creating unit cell vectors
     b2 = np.array([a/2, a*np.sqrt(3)/6, a*np.sqrt(2/3)])
     return b0, b1, b2
     
-def initizalizeR(n, N, b0, b1, b2):
-    r = np.zeros([N, 3])
+def initizalizeR(n, N, b0, b1, b2): #creating and initializing position vectors
+    r = np.zeros((N, 3))
     for i0 in range(n):
         for i1 in range(n):
             for i2 in range(n):
@@ -34,37 +37,33 @@ def initizalizeR(n, N, b0, b1, b2):
                 
     return r
 
-def xyzFileCreator(xyzFileName, r, N):
-    with open(xyzFileName, 'w') as f:
-        f.write(f'{N}\n\n')
-        for i in range(N):
-            f.write(f'Ar\t{r[i, 0]}\t{r[i, 1]}\t{r[i, 2]}\n')
-
-def randomEnergy(T0):
+def randomEnergy(T0): #generating random energy from Maxwell distribution
     k = 8.31e-3
     x = random.random()
     if x == 0.0:
         x = 1.
     return -k*T0*np.log(x)/2
    
-def randomSign():
+def randomSign(): #generating randomly + or -
     return random.randint(0, 1)*2-1
-   
-def vectorNormSquared(x):
+
+@jit   
+def vectorNormSquared(x): #calculating squared norm
     return x.dot(x)
-    
-def vectorNorm(x):
+
+@jit    
+def vectorNorm(x): #calculating norm
     return np.sqrt(vectorNormSquared(x))
     
-def initializeP(N, m, T0):
-    p = np.zeros([N, 3])
+def initializeP(N, m, T0): #creating and initializing momentum vectors
+    p = np.zeros((N, 3))
     for i in range(N):
         for j in range(3):
             p[i, j] = randomSign()*np.sqrt(2*m*randomEnergy(T0))   
     p = p - sum(p)/N
     return p
 
-def histogramsP(p):
+def histogramsP(p): #drawing initial momentum histograms
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
     ax1.hist(p[:, 0], 15, color='green')
     ax2.hist(p[:, 1], 15, color='green')
@@ -76,29 +75,34 @@ def histogramsP(p):
     ax3.set_xlabel('p_z')
     
     plt.show()
- 
-def calculateVP(e, R, ri, rj):
+
+@jit 
+def calculateVP(e, R, ri, rj): #calculating Vp
     rij = vectorNorm(ri-rj)
     return e*((R/rij)**12-2*(R/rij)**6)
     
-def calculateVS(L, f, ri):
+@jit   
+def calculateVS(L, f, ri): #calculating Vs
     ri_norm = vectorNorm(ri)
     if ri_norm >= L:
         return f/2*(ri_norm-L)**2
     return 0
     
-def calculateFP(e, R, ri, rj):
+@jit    
+def calculateFP(e, R, ri, rj): #calculating Fp
     rij = vectorNorm(ri-rj)
     return 12*e*((R/rij)**12-(R/rij)**6)*(ri-rj)/vectorNormSquared(ri-rj)
-    
-def calculateFS(L, f, ri):
+
+@jit    
+def calculateFS(L, f, ri): #calculating Fs
     ri_norm = vectorNorm(ri)
     if ri_norm >= L:
         return f*(L-ri_norm)*ri/ri_norm
     return np.zeros(3)
 
-def calculateFPV(N, e, R, L, f, r):
-    F = np.zeros([N, 3])
+@jit
+def calculateFPV(N, e, R, L, f, r): #calculating F, P, V
+    F = np.zeros((N, 3))
     P = 0
     V = 0
     for i in range(N):
@@ -116,16 +120,16 @@ def calculateFPV(N, e, R, L, f, r):
     P = P/(4*np.pi*L**2)
     return F, P, V
 
-def Ekin_i(pi, m):
+def Ekin_i(pi, m): #calculating kinetic energy
     return vectorNormSquared(pi)/(2*m)
     
-def Ekin(p, m):
+def Ekin(p, m): #calculating total kinetic energy
     E = 0
     for pi in p:
         E = E + vectorNormSquared(pi)
     return E/(2*m)
 
-def integrate(outputFileName, xyzFileName, p, r, F, P, V, tau, m, L, N, e, R, f, So, Sd, Sout, Sxyz):
+def integrate(outputFileName, xyzFileName, p, r, F, P, V, tau, m, L, N, e, R, f, So, Sd, Sout, Sxyz): #simulation
     outputFile = open(outputFileName, 'w')
     xyzFile = open(xyzFileName, 'w')
     
@@ -167,7 +171,7 @@ def integrate(outputFileName, xyzFileName, p, r, F, P, V, tau, m, L, N, e, R, f,
     outputFile.close()
     xyzFile.close()
     
-def main():
+def main(): #main function
     parametersFileName, outputFileName, xyzFileName = analyzeArguments()
     
     #loading parameters
@@ -179,11 +183,11 @@ def main():
     Sout = int(Sout)
     Sxyz = int(Sxyz)
     
+    #initializing
     b0, b1, b2 = initializeB(a)
     r = initizalizeR(n, N, b0, b1, b2)
-    #xyzFileCreator(xyzFileName, r, N)
     p = initializeP(N, m, T0)
-    #histogramsP(p)
+    #histogramsP(p) #uncomment to draw momentum histograms
     
     F, P, V = calculateFPV(N, e, R, L, f, r)
     print("Sily:")
@@ -194,3 +198,5 @@ def main():
     print("Energia calkowita:", H0)
     integrate(outputFileName, xyzFileName, p, r, F, P, V, tau, m, L, N, e, R, f, So, Sd, Sout, Sxyz)
 main()
+end = time.time()
+print(end-start)

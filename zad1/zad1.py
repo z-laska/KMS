@@ -2,7 +2,6 @@ import time
 start = time.time() 
 import sys 
 import numpy as np
-import random
 #import matplotlib.pyplot as plt #uncomment to draw histograms
 from tqdm import tqdm
 from numba import jit
@@ -26,40 +25,33 @@ def initializeB(a): #creating unit cell vectors
     b1 = np.array([a/2, a*np.sqrt(3)/2, 0])
     b2 = np.array([a/2, a*np.sqrt(3)/6, a*np.sqrt(2/3)])
     return b0, b1, b2
-    
+
+@jit    
 def initizalizeR(n, N, b0, b1, b2): #creating and initializing position vectors
     r = np.zeros((N, 3))
     for i0 in range(n):
         for i1 in range(n):
             for i2 in range(n):
                 i = i0 + i1*n+i2*n*n
-                r[i, :] = (i0-(n-1)/2)*b0 + (i1-(n-1)/2)*b1 + (i2-(n-1)/2)*b2
-                
+                r[i] = (i0-(n-1)/2)*b0 + (i1-(n-1)/2)*b1 + (i2-(n-1)/2)*b2
     return r
 
-def randomEnergy(T0): #generating random energy from Maxwell distribution
-    k = 8.31e-3
-    x = random.random()
-    if x == 0.0:
-        x = 1.
-    return -k*T0*np.log(x)/2
+@jit
+def randomEnergy(T0, N): #generating random energy from Maxwell distribution
+    x = np.random.random((N, 3))
+    for xi in x:
+        for xj in xi:
+            if xj == 0.0:
+                xj = 1.
+    return -8.31e-3*T0*np.log(x)/2
    
-def randomSign(): #generating randomly + or -
-    return random.randint(0, 1)*2-1
+def randomSign(N): #generating randomly + or -
+    return np.random.randint(2, size=(N, 3))*2-1
 
-@jit   
-def vectorNormSquared(x): #calculating squared norm
-    return x.dot(x)
-
-@jit    
-def vectorNorm(x): #calculating norm
-    return np.sqrt(vectorNormSquared(x))
     
 def initializeP(N, m, T0): #creating and initializing momentum vectors
     p = np.zeros((N, 3))
-    for i in range(N):
-        for j in range(3):
-            p[i, j] = randomSign()*np.sqrt(2*m*randomEnergy(T0))   
+    p = np.multiply(randomSign(N),  np.sqrt(2*m*randomEnergy(T0, N)))   
     p = p - sum(p)/N
     return p
 
@@ -78,24 +70,29 @@ def histogramsP(p): #drawing initial momentum histograms
 
 @jit 
 def calculateVP(e, R, ri, rj): #calculating Vp
-    rij = vectorNorm(ri-rj)
-    return e*((R/rij)**12-2*(R/rij)**6)
+    r_diff = ri-rj
+    rij = np.sqrt(r_diff.dot(r_diff))
+    z = R/rij
+    return e*((z)**12-2*(z)**6)
     
 @jit   
 def calculateVS(L, f, ri): #calculating Vs
-    ri_norm = vectorNorm(ri)
+    ri_norm = np.sqrt(ri.dot(ri))
     if ri_norm >= L:
         return f/2*(ri_norm-L)**2
     return 0
     
 @jit    
 def calculateFP(e, R, ri, rj): #calculating Fp
-    rij = vectorNorm(ri-rj)
-    return 12*e*((R/rij)**12-(R/rij)**6)*(ri-rj)/vectorNormSquared(ri-rj)
+    r_diff = ri-rj
+    rij2 = r_diff.dot(r_diff)
+    rij = np.sqrt(rij2)
+    z = R/rij
+    return 12*e*((z)**12-(z)**6)*(r_diff)/rij2
 
 @jit    
 def calculateFS(L, f, ri): #calculating Fs
-    ri_norm = vectorNorm(ri)
+    ri_norm = np.sqrt(ri.dot(ri))
     if ri_norm >= L:
         return f*(L-ri_norm)*ri/ri_norm
     return np.zeros(3)
@@ -106,27 +103,27 @@ def calculateFPV(N, e, R, L, f, r): #calculating F, P, V
     P = 0
     V = 0
     for i in range(N):
-        ri = r[i, :]
+        ri = r[i]
         V = V + calculateVS(L, f, ri)
         FSi = calculateFS(L, f, ri)
-        F[i, :] = F[i, :] + FSi
-        P = P + vectorNorm(FSi)
+        F[i] = np.add(F[i], FSi)
+        P = P + np.sqrt(FSi.dot(FSi))
         for j in range(i):
-            rj = r[j, :]
+            rj = r[j]
             V = V + calculateVP(e, R, ri, rj)
             Fij = calculateFP(e, R, ri, rj)
-            F[i, :] = F[i, :] + Fij
-            F[j, :] = F[j, :] - Fij
+            F[i] = np.add(F[i], Fij)
+            F[j] = np.subtract(F[j], Fij)
     P = P/(4*np.pi*L**2)
     return F, P, V
 
 def Ekin_i(pi, m): #calculating kinetic energy
-    return vectorNormSquared(pi)/(2*m)
+    return pi.dot(pi)/(2*m)
     
 def Ekin(p, m): #calculating total kinetic energy
     E = 0
     for pi in p:
-        E = E + vectorNormSquared(pi)
+        E = E + pi.dot(pi)
     return E/(2*m)
 
 def integrate(outputFileName, xyzFileName, p, r, F, P, V, tau, m, L, N, e, R, f, So, Sd, Sout, Sxyz): #simulation
@@ -142,24 +139,24 @@ def integrate(outputFileName, xyzFileName, p, r, F, P, V, tau, m, L, N, e, R, f,
     T = 0
     H = 0
     for s in tqdm(range(So+Sd)):
-        p = p + F*tau/2
-        r = r + p*tau/m
+        p = np.add(p, np.multiply(F, tau/2))
+        r = np.add(r, np.multiply(p, tau/m))
         F, P, V = calculateFPV(N, e, R, L, f, r)
-        p = p + F*tau/2
+        p = np.add(p, np.multiply(F, tau/2))
         E_kin = Ekin(p, m)
         T = 2*E_kin/(3*N*k)
         H = E_kin + V
         if not s%Sout:
             t = s*tau
-            #zapis t, H, V, T, P
+            #saving t, H, V, T, P to file
             outputFile.write(f'{t}\t{H}\t{V}\t{T}\t{P}\n')
         if not s%Sxyz:   
-            #zapis x, y, z E_kin dla każdego atomu do avs.dat
+            #daving x, y, z E_kin to file
             xyzFile.write(f'{N}\n\n')
             for i in range(N):
-                xyzFile.write(f'Ar\t{r[i, 0]}\t{r[i, 1]}\t{r[i, 2]}\t{Ekin_i(p[i, :], m)}\n')
+                xyzFile.write(f'Ar\t{r[i, 0]}\t{r[i, 1]}\t{r[i, 2]}\t{Ekin_i(p[i], m)}\n')
         if s>=So:
-            #akumulacja average
+            #accumulation average
             Tav = Tav + T
             Pav = Pav + P
             Hav = Hav + H      
@@ -190,12 +187,12 @@ def main(): #main function
     #histogramsP(p) #uncomment to draw momentum histograms
     
     F, P, V = calculateFPV(N, e, R, L, f, r)
-    print("Sily:")
-    print(F)
-    print("Cisnienie:", P)
-    print("Energia potencjalna:", V)
-    H0 = Ekin(p, m) + V
-    print("Energia calkowita:", H0)
+    #print("Sily:")
+    #print(F)
+    #print("Cisnienie:", P)
+    #print("Energia potencjalna:", V)
+    #H0 = Ekin(p, m) + V
+    #print("Energia calkowita:", H0)
     integrate(outputFileName, xyzFileName, p, r, F, P, V, tau, m, L, N, e, R, f, So, Sd, Sout, Sxyz)
 main()
 end = time.time()
